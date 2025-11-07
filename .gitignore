@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+env/
+venv/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+
+# Benchmark outputs
+benchmarks/
+*.tt
+benchmark_metadata.json
+
+# Logs
+*.log
+
