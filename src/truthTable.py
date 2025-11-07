@@ -243,7 +243,6 @@ class TruthTable:
         self,
         name: str = "truth_table",
         use_qroam: bool = False,
-        use_select_swap: bool = False,
     ):
         try:
             import numpy as np

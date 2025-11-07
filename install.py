@@ -1,228 +1,237 @@
 from __future__ import annotations
 
-import json
+import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
-
-from qualtran.resource_counting import QECGatesCost, get_cost_value
+from typing import List
 
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIR = BASE_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from gfmult import generate_truth_table, find_irreducible_poly, poly_to_str  # type: ignore # noqa: E402
-from truthTable import TruthTable  # type: ignore # noqa: E402
-from selectswap import truth_table_to_verilog
+from metadata import load_metadata  # type: ignore # noqa: E402
+import gfmult  # type: ignore # noqa: E402
+import modexp  # type: ignore # noqa: E402
+import preparethc  # type: ignore # noqa: E402
+import randtt  # type: ignore # noqa: E402
+
+# Available benchmark types
+BENCHMARK_TYPES = {
+    'gf2': 'GF(2^n) multipliers',
+    'random': 'Random truth tables',
+    'modexp': 'Modular exponentiation',
+    'preparethc': 'PrepareTHC chemistry',
+}
 
 
-class BenchmarkInstaller:
-    def __init__(self, benchmark_dir: str | Path = None):
-        if benchmark_dir is None:
-            benchmark_dir = BASE_DIR / "benchmarks"
-        self.benchmark_dir = Path(benchmark_dir).resolve()
-        self.tt_dir = self.benchmark_dir / "truth_tables"
-        self.metadata_file = self.benchmark_dir / "benchmark_metadata.json"
-        self._ensure_directories()
-        self._load_metadata()
-
-    def _ensure_directories(self) -> None:
-        self.benchmark_dir.mkdir(parents=True, exist_ok=True)
-        self.tt_dir.mkdir(parents=True, exist_ok=True)
-
-    def _load_metadata(self) -> None:
-        if self.metadata_file.exists():
-            try:
-                with open(self.metadata_file, "r") as f:
-                    self.metadata = json.load(f)
-            except Exception:
-                self.metadata = {}
-        else:
-            self.metadata = {}
-
-    def _save_metadata(self) -> None:
-        with open(self.metadata_file, "w") as f:
-            json.dump(self.metadata, f, indent=2)
-
-    def _calculate_t_cost(self, tt: TruthTable, name: str) -> Dict[str, int]:
-        results = {}
-        configs = [
-            ("qrom_t_cost", dict()),
-            ("qroam_t_cost", dict(use_qroam=True)),
-            ("qroam_selectswap_t_cost", dict(use_qroam=True, use_select_swap=True)),
-        ]
-        for key, opts in configs:
-            try:
-                bloq = tt.to_bloq(name=name, **opts)
-                gc = get_cost_value(bloq, cost_key=QECGatesCost())
-                results[key] = gc.total_t_count()
-            except Exception as exc:
-                print(f"{key} unavailable for {name}: {exc}")
-                results[key] = 0
-        return results
-
-    def _update_metadata(
-        self, filename: str, tt: TruthTable, problem_type: str, **kwargs
-    ) -> None:
-        t_costs = self._calculate_t_cost(tt, filename)
-        self.metadata[filename] = {
-            "problem_type": problem_type,
-            "num_inputs": tt.num_inputs,
-            "num_outputs": tt.num_outputs,
-            **t_costs,
-            **kwargs,
-        }
-        self._save_metadata()
-
-    def _write_verilog(self, tt: TruthTable, path: Path) -> Optional[str]:
-        try:
-            verilog = truth_table_to_verilog(tt)
-            target = path.with_suffix(".v")
-            target.write_text(verilog)
-            return str(target)
-        except Exception as exc:
-            print(f"Verilog emission failed for {path.name}: {exc}")
-            return None
-
-    def install_gf2_multipliers(self, sizes: List[int] = None) -> List[str]:
-        if sizes is None:
-            sizes = [2, 3, 4, 5, 6, 7, 8, 9]
-        created_files = []
-        for n in sizes:
-            print(f"Generating GF(2^{n}) multiplier truth table...")
-            poly = find_irreducible_poly(n)
-            if poly is None:
-                print(f"Warning: No irreducible polynomial found for degree {n}")
-                continue
-            print(f"Using polynomial: {poly_to_str(poly)}")
-            try:
-                tt = generate_truth_table(n, poly)
-                if tt is None:
-                    print(f"Warning: Failed to generate truth table for GF(2^{n})")
-                    continue
-                filename = f"gf_mult{n}.tt"
-                filepath = self.tt_dir / filename
-                tt.to_file(str(filepath))
-                self._update_metadata(
-                    filename,
-                    tt,
-                    "gf2_multiplier",
-                    polynomial=poly_to_str(poly),
-                    field_size=n,
-                )
-                self._write_verilog(tt, filepath)
-                created_files.append(str(filepath))
-            except Exception as e:
-                print(f"Error generating GF(2^{n}) multiplier: {e}")
-                continue
-        return created_files
-
-    def install_custom_truth_table(
-        self, name: str, patterns: List[str], num_inputs: int
-    ) -> str:
-        tt = TruthTable.from_patterns(patterns, num_inputs=num_inputs)
-        filename = f"{name}.tt"
-        filepath = self.tt_dir / filename
-        tt.to_file(str(filepath))
-        self._update_metadata(filename, tt, "custom")
-        self._write_verilog(tt, filepath)
-        return str(filepath)
-
-    def install_random_truth_tables(
-        self,
-        input_range: tuple[int, int] = (3, 8),
-        output_counts: List[int] = [1, 2, 4],
-        num_seeds: int = 6,
-    ) -> List[str]:
-        from randtt import install
-        return install(self, input_range, output_counts, num_seeds)
-
-    def install_modexp_truth_tables(self) -> List[str]:
-        from modexp import install
-        return install(self)
-
-    def install_preparethc_benchmarks(self) -> List[str]:
-        from preparethc import install
-        return install(self)
-
-    def list_installed_benchmarks(self) -> List[str]:
-        if not self.tt_dir.exists():
-            return []
-        return sorted(str(file_path) for file_path in self.tt_dir.glob("*.tt"))
-
-    def get_metadata(self, name: str = None) -> Dict:
-        if name:
-            return self.metadata.get(name, {})
-        return self.metadata
-
-    def load_benchmark(self, name: str) -> Optional[TruthTable]:
-        filepath = self.tt_dir / f"{name}.tt"
-        if not filepath.exists():
-            print(f"Benchmark '{name}' not found at {filepath}")
-            return None
-        try:
-            return TruthTable.from_file(str(filepath))
-        except Exception as e:
-            print(f"Error loading benchmark '{name}': {e}")
-            return None
+def ensure_directories(benchmark_dir: Path) -> tuple[Path, Path, Path]:
+    """Ensure benchmark directories exist and return paths."""
+    benchmark_dir = benchmark_dir.resolve()
+    tt_dir = benchmark_dir / "truth_tables"
+    metadata_file = benchmark_dir / "benchmark_metadata.json"
+    
+    benchmark_dir.mkdir(parents=True, exist_ok=True)
+    tt_dir.mkdir(parents=True, exist_ok=True)
+    
+    return benchmark_dir, tt_dir, metadata_file
 
 
-def install_default_benchmarks(benchmark_dir: str | Path | None = None) -> List[str]:
-    installer = BenchmarkInstaller(benchmark_dir)
-    return installer.install_gf2_multipliers()
+def install_gf2_multipliers(
+    benchmark_dir: str | Path | None = None, 
+    sizes: List[int] | None = None
+) -> List[str]:
+    """Install GF(2^n) multiplier benchmarks."""
+    if benchmark_dir is None:
+        benchmark_dir = BASE_DIR / "benchmarks"
+    _, tt_dir, metadata_file = ensure_directories(Path(benchmark_dir))
+    metadata = load_metadata(metadata_file)
+    return gfmult.install(tt_dir, metadata, metadata_file, sizes)
 
 
-def install_random_benchmarks(
+def install_random_truth_tables(
     benchmark_dir: str | Path | None = None,
-    input_range: tuple[int, int] = (3, 8),
+    input_range: tuple[int, int] = (2, 8),
     output_counts: List[int] = [1, 2, 4],
     num_seeds: int = 6,
 ) -> List[str]:
-    installer = BenchmarkInstaller(benchmark_dir)
-    return installer.install_random_truth_tables(input_range, output_counts, num_seeds)
+    """Install random truth table benchmarks."""
+    if benchmark_dir is None:
+        benchmark_dir = BASE_DIR / "benchmarks"
+    _, tt_dir, metadata_file = ensure_directories(Path(benchmark_dir))
+    metadata = load_metadata(metadata_file)
+    return randtt.install(tt_dir, metadata, metadata_file, input_range, output_counts, num_seeds)
 
 
 def install_modexp_benchmarks(benchmark_dir: str | Path | None = None) -> List[str]:
-    installer = BenchmarkInstaller(benchmark_dir)
-    return installer.install_modexp_truth_tables()
+    """Install modular exponentiation benchmarks."""
+    if benchmark_dir is None:
+        benchmark_dir = BASE_DIR / "benchmarks"
+    _, tt_dir, metadata_file = ensure_directories(Path(benchmark_dir))
+    metadata = load_metadata(metadata_file)
+    return modexp.install(tt_dir, metadata, metadata_file)
 
 
-def install_preparethc_benchmarks(
-    benchmark_dir: str | Path | None = None,
-) -> List[str]:
-    installer = BenchmarkInstaller(benchmark_dir)
-    return installer.install_preparethc_benchmarks()
+def install_preparethc_benchmarks(benchmark_dir: str | Path | None = None) -> List[str]:
+    """Install prepareTHC chemistry benchmarks."""
+    if benchmark_dir is None:
+        benchmark_dir = BASE_DIR / "benchmarks"
+    _, tt_dir, metadata_file = ensure_directories(Path(benchmark_dir))
+    metadata = load_metadata(metadata_file)
+    return preparethc.install(tt_dir, metadata, metadata_file)
+
+
+def list_benchmarks(benchmark_dir: str | Path | None = None) -> List[str]:
+    """List all installed benchmark files."""
+    if benchmark_dir is None:
+        benchmark_dir = BASE_DIR / "benchmarks"
+    tt_dir = Path(benchmark_dir) / "truth_tables"
+    if not tt_dir.exists():
+        return []
+    return sorted(str(file_path) for file_path in tt_dir.glob("*.tt"))
+
+
+def main():
+    """Main entry point with argument parsing."""
+    parser = argparse.ArgumentParser(
+        description='Install ASPLOS benchmark truth tables',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Available benchmark types:
+  gf2         - {BENCHMARK_TYPES['gf2']}
+  random      - {BENCHMARK_TYPES['random']}
+  modexp      - {BENCHMARK_TYPES['modexp']}
+  preparethc  - {BENCHMARK_TYPES['preparethc']}
+  all         - Generate all benchmark types (default)
+
+Examples:
+  python install.py                                    # Install all benchmarks to default location
+  python install.py --output-dir ./my_benchmarks       # Install all to custom directory
+  python install.py --benchmarks gf2 random            # Install only GF2 and random benchmarks
+  python install.py -o ./output -b modexp preparethc   # Install specific benchmarks to custom directory
+        """
+    )
+    
+    parser.add_argument(
+        '-o', '--output-dir',
+        type=str,
+        default=None,
+        help='Output directory for benchmarks (default: ./benchmarks)'
+    )
+    
+    parser.add_argument(
+        '-b', '--benchmarks',
+        nargs='+',
+        choices=list(BENCHMARK_TYPES.keys()) + ['all'],
+        default=['all'],
+        help='Benchmark types to generate (default: all)'
+    )
+    
+    parser.add_argument(
+        '--gf2-sizes',
+        nargs='+',
+        type=int,
+        default=[2, 3, 4, 5],
+        help='GF2 multiplier sizes (default: 2 3 4 5)'
+    )
+    
+    parser.add_argument(
+        '--random-input-min',
+        type=int,
+        default=2,
+        help='Minimum number of inputs for random truth tables (default: 2)'
+    )
+    
+    parser.add_argument(
+        '--random-input-max',
+        type=int,
+        default=8,
+        help='Maximum number of inputs for random truth tables (default: 8)'
+    )
+    
+    parser.add_argument(
+        '--random-outputs',
+        nargs='+',
+        type=int,
+        default=[1, 2, 4],
+        help='Number of outputs for random truth tables (default: 1 2 4)'
+    )
+    
+    parser.add_argument(
+        '--random-seeds',
+        type=int,
+        default=6,
+        help='Number of random seeds (default: 6)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Determine output directory
+    output_dir = args.output_dir if args.output_dir else BASE_DIR / "benchmarks"
+    
+    # Determine which benchmarks to generate
+    benchmarks_to_generate = set(args.benchmarks)
+    if 'all' in benchmarks_to_generate:
+        benchmarks_to_generate = set(BENCHMARK_TYPES.keys())
+    
+    print(f"Output directory: {output_dir}")
+    print(f"Generating benchmarks: {', '.join(sorted(benchmarks_to_generate))}\n")
+    
+    all_files = []
+    
+    # Install GF2 multipliers
+    if 'gf2' in benchmarks_to_generate:
+        print("Installing GF2 multiplier benchmarks...")
+        gf2_files = install_gf2_multipliers(
+            benchmark_dir=output_dir,
+            sizes=args.gf2_sizes
+        )
+        print(f"Created {len(gf2_files)} GF2 multiplier files\n")
+        all_files.extend(gf2_files)
+    
+    # Install random truth tables
+    if 'random' in benchmarks_to_generate:
+        print("Installing random truth table benchmarks...")
+        random_files = install_random_truth_tables(
+            benchmark_dir=output_dir,
+            input_range=(args.random_input_min, args.random_input_max),
+            output_counts=args.random_outputs,
+            num_seeds=args.random_seeds
+        )
+        print(f"Created {len(random_files)} random truth table files\n")
+        all_files.extend(random_files)
+    
+    # Install modexp benchmarks
+    if 'modexp' in benchmarks_to_generate:
+        print("Installing ModExp benchmarks...")
+        modexp_files = install_modexp_benchmarks(benchmark_dir=output_dir)
+        print(f"Created {len(modexp_files)} ModExp truth table files\n")
+        all_files.extend(modexp_files)
+    
+    # Install prepareTHC benchmarks
+    if 'preparethc' in benchmarks_to_generate:
+        print("Installing prepareTHC benchmarks...")
+        preparethc_files = install_preparethc_benchmarks(benchmark_dir=output_dir)
+        print(f"Created {len(preparethc_files)} prepareTHC benchmark files\n")
+        all_files.extend(preparethc_files)
+    
+    # List all installed benchmarks
+    print("All installed benchmarks:")
+    all_benchmarks = list_benchmarks(benchmark_dir=output_dir)
+    for benchmark in all_benchmarks:
+        print(f"  {benchmark}")
+    
+    # Test loading one benchmark
+    if all_benchmarks:
+        from truthTable import TruthTable
+        test_name = Path(all_benchmarks[0]).stem
+        print(f"\nTesting load of '{test_name}':")
+        tt = TruthTable.from_file(all_benchmarks[0])
+        if tt:
+            print(f"  Successfully loaded: {tt.num_inputs} inputs, {tt.num_outputs} outputs")
+    
+    print(f"\n✓ Total files created: {len(all_files)}")
 
 
 if __name__ == "__main__":
-    installer = BenchmarkInstaller()
-    print("Installing GF2 multiplier benchmarks...")
-    gf2_files = installer.install_gf2_multipliers([2, 3, 4, 5])
-    print(f"\nCreated {len(gf2_files)} GF2 multiplier files")
-    print("\nInstalling random truth table benchmarks...")
-    random_files = installer.install_random_truth_tables(
-        input_range=(3, 8), output_counts=[1, 2, 4], num_seeds=6
-    )
-    print(f"\nCreated {len(random_files)} random truth table files")
-
-    print("\nInstalling ModExp benchmarks...")
-    modexp_files = installer.install_modexp_truth_tables()
-    print(f"\nCreated {len(modexp_files)} ModExp truth table files")
-
-    print("\nInstalling prepareTHC benchmarks...")
-    preparethc_files = installer.install_preparethc_benchmarks()
-    print(f"\nCreated {len(preparethc_files)} prepareTHC benchmark files")
-
-    print("\nAll installed benchmarks:")
-    all_benchmarks = installer.list_installed_benchmarks()
-    for benchmark in all_benchmarks:
-        print(f"  {benchmark}")
-    if all_benchmarks:
-        test_name = Path(all_benchmarks[0]).stem
-        print(f"\nTesting load of '{test_name}':")
-        tt = installer.load_benchmark(test_name)
-        if tt:
-            print(
-                f"  Successfully loaded: {tt.num_inputs} inputs, {tt.num_outputs} outputs"
-            )
+    main()

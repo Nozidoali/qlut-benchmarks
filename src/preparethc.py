@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
@@ -8,6 +9,7 @@ from qualtran.resource_counting import QECGatesCost, get_cost_value
 from qualtran.resource_counting.generalizers import ignore_split_join
 
 from truthTable import TruthTable
+from metadata import save_metadata
 
 SETUPS = [
     (8, 6, 2, 1e-2),
@@ -43,7 +45,8 @@ def calculate_qrom_node_t_cost(node: Any) -> Dict[str, int]:
         return {"qrom_node_t_cost": 0}
 
 
-def install(installer) -> List[str]:
+def install(tt_dir: Path, metadata: Dict, metadata_file: Path) -> List[str]:
+    """Install prepareTHC chemistry benchmarks."""
     files: List[str] = []
     like = (QROM, QROAMClean, QROAMCleanAdjoint)
     for orb, mu, sp, eps in SETUPS:
@@ -62,12 +65,12 @@ def install(installer) -> List[str]:
         for idx, node in enumerate(nodes):
             cls_name = type(node).__name__
             filename = f"preparethc_orb{orb}_mu{mu}_sp{sp}_eps{eps:.0e}_{cls_name}_{idx}.tt"
-            path = installer.tt_dir / filename
+            path = tt_dir / filename
             try:
                 tt = TruthTable.from_qrom_bloq(node, bitorder="lsb")
                 tt.to_file(str(path))
                 costs = calculate_qrom_node_t_cost(node)
-                installer.metadata[filename] = {
+                metadata[filename] = {
                     "problem_type": "preparethc_qrom",
                     "bloq_type": "prepareTHC_QROM",
                     "num_spin_orb": orb,
@@ -81,8 +84,7 @@ def install(installer) -> List[str]:
                     "num_outputs": tt.num_outputs,
                     **costs,
                 }
-                installer._save_metadata()
-                installer._write_verilog(tt, path)
+                save_metadata(metadata, metadata_file)
                 files.append(str(path))
             except Exception as exc:
                 print(f"preparethc node failed (orb={orb}, mu={mu}, sp={sp}, node={cls_name}, idx={idx}): {exc}")

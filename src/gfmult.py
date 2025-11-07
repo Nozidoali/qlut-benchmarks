@@ -1,4 +1,8 @@
+from pathlib import Path
+from typing import Dict, List
+
 from truthTable import TruthTable
+from metadata import load_metadata, update_metadata
 
 
 def gf2_mul(a, b):
@@ -120,6 +124,42 @@ def synthesize_gf_mult(n: int, verbose: bool = False) -> TruthTable:
     else:
         print("No irreducible polynomial found for degree", n)
         return None
+
+
+def install(tt_dir: Path, metadata: Dict, metadata_file: Path, sizes: List[int] = None) -> List[str]:
+    """Install GF(2^n) multiplier benchmarks."""
+    if sizes is None:
+        sizes = [2, 3, 4, 5, 6, 7, 8, 9]
+    created_files = []
+    for n in sizes:
+        print(f"Generating GF(2^{n}) multiplier truth table...")
+        poly = find_irreducible_poly(n)
+        if poly is None:
+            print(f"Warning: No irreducible polynomial found for degree {n}")
+            continue
+        print(f"Using polynomial: {poly_to_str(poly)}")
+        try:
+            tt = generate_truth_table(n, poly)
+            if tt is None:
+                print(f"Warning: Failed to generate truth table for GF(2^{n})")
+                continue
+            filename = f"gf_mult{n}.tt"
+            filepath = tt_dir / filename
+            tt.to_file(str(filepath))
+            update_metadata(
+                metadata,
+                metadata_file,
+                filename,
+                tt,
+                "gf2_multiplier",
+                polynomial=poly_to_str(poly),
+                field_size=n,
+            )
+            created_files.append(str(filepath))
+        except Exception as e:
+            print(f"Error generating GF(2^{n}) multiplier: {e}")
+            continue
+    return created_files
 
 
 if __name__ == "__main__":
