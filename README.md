@@ -34,3 +34,13 @@ Circuits computing `base^exp mod N` for various parameter combinations.
 
 ### PrepareTHC Chemistry
 QROM nodes extracted from quantum chemistry prepareTHC bloqs with different orbital/mu/state-prep parameters.
+
+## Verification
+
+Verify that Verilog implementations match their truth tables using ABC:
+
+```bash
+python verify.py --patterns "gf_mult*" "modexp_*" "random_*"
+```
+
+Requires ABC: `brew install abc` or `apt install abc`

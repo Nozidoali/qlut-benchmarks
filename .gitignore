@@ -15,6 +15,7 @@ venv/
 benchmarks/
 *.tt
 benchmark_metadata.json
+abc.history
 
 # Logs
 *.log

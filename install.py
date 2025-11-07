@@ -1,15 +1,10 @@
 from __future__ import annotations
 
 import json
-import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-import numpy as np
-from qualtran.bloqs.chemistry.thc import PrepareTHC
-from qualtran.bloqs.data_loading.qrom import QROM
-from qualtran.bloqs.data_loading.qroam_clean import QROAMClean, QROAMCleanAdjoint
 from qualtran.resource_counting import QECGatesCost, get_cost_value
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -65,19 +60,6 @@ class BenchmarkInstaller:
             except Exception as exc:
                 print(f"{key} unavailable for {name}: {exc}")
                 results[key] = 0
-        return results
-
-    def _calculate_preparethc_t_cost(
-        self, prep_thc: PrepareTHC, name: str
-    ) -> Dict[str, int]:
-        results = {}
-        try:
-            gc = get_cost_value(prep_thc, cost_key=QECGatesCost())
-            results["preparethc_t_cost"] = gc.total_t_count()
-        except Exception as exc:
-            print(f"prepareTHC cost unavailable for {name}: {exc}")
-            results["preparethc_t_cost"] = 0
-
         return results
 
     def _update_metadata(
@@ -160,76 +142,9 @@ class BenchmarkInstaller:
         from modexp import install
         return install(self)
 
-    def _modexp_truth_table(self, base: int, mod: int, exp_bitsize: int):
-        n_in = exp_bitsize
-        n_out = math.ceil(math.log2(mod))
-        n_rows = 1 << n_in
-        outputs = [[] for _ in range(n_out)]
-        for e in range(n_rows):
-            val = pow(base, e, mod)
-            bits = format(val, f"0{n_out}b")
-            for j, b in enumerate(bits[::-1]):
-                outputs[j].append(b)
-        truth_table = ["".join(col) for col in outputs]
-        return truth_table, n_in, n_out
-
     def install_preparethc_benchmarks(self) -> List[str]:
         from preparethc import install
         return install(self)
-
-    def _generate_preparethc_bloq(
-        self, num_spin_orb: int, num_mu: int, num_bits_state_prep: int, eps: float
-    ) -> PrepareTHC:
-        tpq = np.random.normal(0, 1, size=(num_spin_orb // 2, num_spin_orb // 2))
-        zeta = np.random.normal(0, 1, size=(num_mu, num_mu))
-        zeta = 0.5 * (zeta + zeta.T)
-        eta = np.random.normal(0, 1, size=(num_mu, num_spin_orb // 2))
-
-        eri_thc = np.einsum(
-            "Pp,Pr,Qq,Qs,PQ->prqs", eta, eta, eta, eta, zeta, optimize=True
-        )
-        tpq_prime = (
-            tpq
-            - 0.5 * np.einsum("illj->ij", eri_thc, optimize=True)
-            + np.einsum("llij->ij", eri_thc, optimize=True)
-        )
-        t_l = np.linalg.eigvalsh(tpq_prime)
-
-        t_mask = np.abs(t_l) > eps
-        t_l = t_l[t_mask]
-
-        col_norms = np.linalg.norm(eta, axis=0)
-        eta = eta[:, col_norms > eps]
-
-        prep_thc = PrepareTHC.from_hamiltonian_coeffs(
-            t_l, eta, zeta, num_bits_state_prep=num_bits_state_prep
-        )
-
-        return prep_thc
-
-    def _calculate_qrom_node_t_cost(self, node: Any, name: str) -> Dict[str, int]:
-        results = {}
-
-        try:
-            gc = get_cost_value(node, cost_key=QECGatesCost())
-            results["qrom_node_t_cost"] = gc.total_t_count()
-        except Exception as e:
-            print(f"Warning: Could not calculate QROM node T-cost for {name}: {e}")
-            results["qrom_node_t_cost"] = 0
-
-        return results
-
-    def _update_qrom_node_metadata(
-        self, filename: str, node: Any, problem_type: str, **kwargs
-    ) -> None:
-        t_costs = self._calculate_qrom_node_t_cost(node, filename)
-        self.metadata[filename] = {
-            "problem_type": problem_type,
-            "bloq_type": "prepareTHC_QROM",
-            **t_costs,
-            **kwargs,
-        }
-        self._save_metadata()
 
     def list_installed_benchmarks(self) -> List[str]:
         if not self.tt_dir.exists():

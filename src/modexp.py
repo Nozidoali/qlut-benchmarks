@@ -1,4 +1,5 @@
-from typing import List
+import math
+from typing import List, Tuple
 
 from truthTable import TruthTable
 
@@ -12,10 +13,23 @@ CASES = [
 ]
 
 
+def generate_modexp_truth_table(base: int, mod: int, exp_bitsize: int) -> Tuple[List[str], int, int]:
+    n_in = exp_bitsize
+    n_out = math.ceil(math.log2(mod))
+    n_rows = 1 << n_in
+    outputs = [[] for _ in range(n_out)]
+    for e in range(n_rows):
+        val = pow(base, e, mod)
+        bits = format(val, f"0{n_out}b")
+        for j, b in enumerate(bits[::-1]):
+            outputs[j].append(b)
+    return ["".join(col) for col in outputs], n_in, n_out
+
+
 def install(installer) -> List[str]:
     files: List[str] = []
     for base, mod, exp_bitsize in CASES:
-        patterns, n_in, n_out = installer._modexp_truth_table(base, mod, exp_bitsize)
+        patterns, n_in, n_out = generate_modexp_truth_table(base, mod, exp_bitsize)
         path = installer.tt_dir / f"modexp_{base}_{mod}_{n_in}_{n_out}.tt"
         try:
             tt = TruthTable.from_patterns(patterns, num_inputs=n_in)

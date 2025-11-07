@@ -342,7 +342,14 @@ def swap_network(k: int, outputs_per_cofactor: int, select_signals: List[str], s
 
 def merge_networks(select_net: LogicNetwork, swap_net: LogicNetwork) -> LogicNetwork:
     merged = LogicNetwork()
-    merged.inputs = select_net.inputs.copy()
+    all_inputs = []
+    for inp in swap_net.inputs:
+        if inp not in select_net.outputs and inp not in all_inputs:
+            all_inputs.append(inp)
+    for inp in select_net.inputs:
+        if inp not in all_inputs:
+            all_inputs.append(inp)
+    merged.inputs = all_inputs
     merged.outputs = swap_net.outputs.copy()
     merged.gates.update(select_net.gates)
     merged.gates.update({k: v for k, v in swap_net.gates.items() if k not in merged.gates})
